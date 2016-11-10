@@ -6,6 +6,9 @@ from sklearn.neighbors import BallTree, DistanceMetric
 from sklearn.metrics import mean_absolute_error as mae
 from sklearn.metrics import mean_squared_error as mse
 from matplotlib import pyplot as plt
+import matplotlib as mpl
+mpl.rc("font", family="Helvetica")
+mpl.rc("font", size=12)
 
 site_name_abbr = {"Merced": "mb", "Tuolumne":"tb"}
 density_factor = {"Merced": 0.333, "Tuolumne": 1.0}
