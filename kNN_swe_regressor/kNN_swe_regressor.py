@@ -108,7 +108,7 @@ class kNN_swe_regressor():
         snodas_map = gdal.Open("SNODAS/" + site_name_abbr[self.site_name].upper() + "_" + \
                                temp_date.strftime("%Y%m%d") + ".tif").ReadAsArray() / 1000.
 
-        # Filter these data by lidar value and store them in the est_dictionary
+        # Filter these data by lidar value and store them in the est_dict
         self.est_dict['kNN'].append(kNN_map_avg[lidar_map >= 0.])
         self.est_dict['snodas'].append(snodas_map[lidar_map >= 0.])
         self.est_dict['lidar'].append(lidar_map[lidar_map >= 0.])
@@ -219,15 +219,16 @@ class kNN_swe_regressor():
         linestyles = ['-', '--', '-.', ':']
         plt_lines = []
         plt_lines_title = []
+        mean_std_max = 0.
         for p in (self.products + [self.groundTruth]):
             tempLine = plt.errorbar(self.date_list, self.est_mean_dict[p], self.est_std_dict[p], linestyle=linestyles.pop(0), marker='o', color=colors.pop(0))
             plt_lines.append(tempLine)
             plt_lines_title.append(p)
+            mean_std_max = max([x+y for x, y in zip(self.est_mean_dict[p], self.est_std_dict[p])] + [mean_std_max])
 
         plt.xlim([min(self.date_list) - timedelta(days=5), max(self.date_list) + timedelta(days=5)])
         plt.grid()
-        plt.ylim([0, max(max(kNN_mean_list), max(lidar_mean_list), max(recon_mean_list), max(snodas_mean_list)) + \
-                  max(max(kNN_std_list), max(lidar_std_list), max(recon_std_list), max(snodas_std_list))])
+        plt.ylim([0, mean_std_max * 1.1])
         
         # Define date_locators separate x-axis by 14 days
         date_locators = [min(self.date_list) + timedelta(days=dt) 
@@ -243,54 +244,66 @@ class kNN_swe_regressor():
         
     def elev_band_mean_std_comparison(self, snodas=False):
 
-        def elevation_avg(est_tuple):
-            elevation_gradient = np.linspace(1500, np.max(est_tuple[-1]), 40)
-            new_features = np.zeros((len(elevation_gradient)-1, 9))
+        def elevation_avg(idx):
+        	# Generate an elevation gradient
+            elevation_gradient = np.linspace(1500, np.max(self.est_dict['elev'][idx]), 40)
 
+            # Generate a numpy array with enough space for elevation and avg and std for all different kind of products
+            prod_avg_std = np.zeros((len(elevation_gradient)-1, (len(self.products)+1)*2+1))
+
+            # Iterate through all elevation bands
             for i, temp_elev in enumerate(elevation_gradient[:-1]):
+
+            	# Calculate the min and max of this elevation band
                 min_elev = temp_elev
                 max_elev = elevation_gradient[i+1]
                 avg_elev = (min_elev + max_elev)/2.
 
-                # Index the data that within the elevation range
-                temp_kNN = est_tuple[0][np.logical_and(est_tuple[-1] >= min_elev, est_tuple[-1] <= max_elev)]
-                temp_lidar = est_tuple[3][np.logical_and(est_tuple[-1] >= min_elev, est_tuple[-1] <= max_elev)]
-                temp_recon = est_tuple[1][np.logical_and(est_tuple[-1] >= min_elev, est_tuple[-1] <= max_elev)]
-                temp_snodas = est_tuple[2][np.logical_and(est_tuple[-1] >= min_elev, est_tuple[-1] <= max_elev)]
+                # Initialize the mean_std list with elevation of this band
+                temp_prod_avg_std = [avg_elev]
 
-                # calculate the mean and std for each item(kNN, lidar, recon, snodas)
-                kNN_mean = np.nanmean(temp_kNN)
-                kNN_std = np.nanstd(temp_kNN)
-                lidar_mean = np.nanmean(temp_lidar)
-                lidar_std = np.nanstd(temp_lidar)
-                recon_mean = np.nanmean(temp_recon)
-                recon_std = np.nanstd(temp_recon)
-                snodas_mean = np.nanmean(temp_snodas)
-                snodas_std = np.nanmean(temp_snodas)
-                new_features[i] = [avg_elev, kNN_mean, kNN_std, lidar_mean, lidar_std, recon_mean, recon_std, snodas_mean, snodas_std]
+                # Iterate through all different products and calculate their mean and standard deviation
+                for p in (self.products + [self.groundTruth]):
+                	temp_prod_avg_std.append(np.nanmean(self.est_dict[p][idx][np.logical_and(self.est_dict['elev'][idx]>=min_elev, 
+                		self.est_dict['elev'][idx]<=max_elev)]))
+	                temp_prod_avg_std.append(np.nanstd(self.est_dict[p][idx][np.logical_and(self.est_dict['elev'][idx]>=min_elev, 
+                		self.est_dict['elev'][idx]<=max_elev)]))
 
-            return new_features
+	            # Assign the temporary mean_std to the entire numpy array
+                prod_avg_std[i] = temp_prod_avg_std
 
-        fig, axarr = plt.subplots(ncols=2, nrows=len(date_list), figsize=(5, 10))
-        swe_avg_by_elev_list = map(elevation_avg, self.est_tuple_list)
+            return prod_avg_std
+
+        # Initialize the figure
+        fig, axarr = plt.subplots(ncols=2, nrows=len(self.date_list), figsize=(5, 10))
+
+        # calculate the mean_std of swe of each elevation band
+        swe_avg_by_elev_list = map(elevation_avg, range(len(self.date_list)))
+
+        # iterate through all dates in this year
         for i, temp_date in enumerate(self.date_list):
             swe_avg_by_elev = swe_avg_by_elev[i]
 
-            # plot the mean at each elevation band
-            knn_line, = axarr[i, 0].plot(swe_avg_by_elev[:, 0], swe_avg_by_elev[:, 1], '-r')
-            lidar_line, = axarr[i, 0].plot(swe_avg_by_elev[:, 0], swe_avg_by_elev[:, 3], '-g')
-            recon_line, = axarr[i, 0].plot(swe_avg_by_elev[:, 0], swe_avg_by_elev[:, 5], '-b')
+            colors = ['-r', '-g', '-b', '-y']
+            facecolors = ['red', 'green', 'blue', 'yellow']
+            plt_lines_title = []
+            plt_lines = []
+            
+            # plot the mean and std at each elevation band
+            for j, p in enumerate(self.products + [self.groundTruth]):
+            	if p != 'snodas':
+            		tempLine, = axarr[i, 0].plot(swe_avg_by_elev[:, 0], swe_avg_by_elev[:, j*2+1], colors.pop(0))
+            		axarr[i, 1].fill_between(swe_avg_by_elev[:, 0], 0, swe_avg_by_elev[:, j*2+2], facecolor=facecolors.pop(0), alpha=0.3)
+            		plt_lines.append(tempLine)
+            		plt_lines_title.append(p)
+            	else:
+            		if snodas:
+            			tempLine, = axarr[i, 0].plot(swe_avg_by_elev[:, 0], swe_avg_by_elev[:, j*2+1], colors.pop(0))
+            			axarr[i, 1].fill_between(swe_avg_by_elev[:, 0], 0, swe_avg_by_elev[:, j*2+2], facecolor=facecolors.pop(0), alpha=0.3)
+            			plt_lines.append(tempLine)
+            			plt_lines_title.append(p)
 
-            if snodas:
-                snodas_line, = axarr[i, 0].plot(swe_avg_by_elev[:, 0], swe_avg_by_elev[:, 7], '-y')
 
-            # plot the std at each elevation band
-            axarr[i, 1].fill_between(avg_features[:, 0], 0, avg_features[:, 2], facecolor='red')
-            axarr[i, 1].fill_between(avg_features[:, 0], 0, avg_features[:, 4], facecolor='green', alpha=0.3)
-            axarr[i, 1].fill_between(avg_features[:, 0], 0, avg_features[:, 6], facecolor='blue', alpha=0.3)
-
-            if snodas:
-                axarr[i, 1].fill_between(avg_features[:, 0], 0, avg_features[:, 8], facecolor='yellow', alpha=0.3)
             if i < len(self.date_list) - 1:
                 axarr[i, 0].xaxis.set_ticklabels([])
                 axarr[i, 1].xaxis.set_ticklabels([])
@@ -301,16 +314,10 @@ class kNN_swe_regressor():
             axarr[i, 1].grid()
         axarr[len(self.date_list)-1, 0].set_xlabel('Elevation, m')
         axarr[len(self.date_list)-1, 1].set_xlabel('Elevation, m')
+        
         # setup legends
-        if snodas:
-            axarr[0, 0].legend([knn_line, lidar_line, recon_line, snodas_line], 
-                ['kNN', 'Lidar', 'Reconstruction', 'SNODAS'], 
-                loc=2, 
-                frameon=False, 
-                fontsize=10)
-        else:
-            axarr[0, 0].legend([knn_line, lidar_line, recon_line], 
-                ['kNN', 'Lidar', 'Reconstruction'], 
+        axarr[0, 0].legend(plt_lines, 
+                plt_lines_title, 
                 loc=2, 
                 frameon=False, 
                 fontsize=10)
