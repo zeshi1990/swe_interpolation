@@ -32,6 +32,8 @@ class kNN_swe_regressor():
                           'intercept':{'kNN':[], 'recon':[], 'snodas': []},
                           'RMSE':{'kNN':[], 'recon':[], 'snodas': []},
                           'MAE':{'kNN':[], 'recon':[], 'snodas': []}}
+        self.est_sensor = []
+        self.est_raw_dict = {'kNN':[], 'lidar':[], 'recon':[], 'snodas': [], 'elev':[]}
     
     # Construct kNN features for particular year and basin, only needs to run once
     def kNN_feature_construct(self, sensor_loc):
@@ -77,7 +79,6 @@ class kNN_swe_regressor():
         emp_cov_matrix = emp_cov.get_precision()
         dist = DistanceMetric.get_metric('mahalanobis', V=emp_cov_matrix)
         self.kNN = BallTree(recon_ts, metric=dist)
-        self.sensor = lidar_sensor_data
     
     # estimate the SWE for the 2D case for all days
     def kNN_predict(self):
@@ -91,6 +92,7 @@ class kNN_swe_regressor():
         dem = gdal.Open("ASO_Lidar/" + self.site_name + "_DEM_500m.tif").ReadAsArray()
         dist, idx = self.kNN.query(np.array([sensor]), k=self.k)
         temp_fn_list = [self.recon_fn[i] for i in idx[0]]
+        self.est_sensor.append(np.nanmean(self.recon_ts[idx], axis=1))
 
         # Compute the sum of all k-nearest neighbors
         kNN_map_sum = 0.
@@ -118,6 +120,27 @@ class kNN_swe_regressor():
         self.est_dict['elev'].append(dem[lidar_map >= 0.])
         if self.year <= 2014:
             self.est_dict['recon'].append(recon_map[lidar_map >= 0.])
+
+        # Do not filter these data and store them in the est_raw_dict
+        self.est_raw_dict['kNN'].append(kNN_map_avg)
+        self.est_raw_dict['snodas'].append(snodas_map)
+        self.est_raw_dict['lidar'].append(lidar_map)
+        self.est_raw_dict['elev'].append(dem)
+        if self.year <= 2014:
+            self.est_raw_dict['recon'].append(recon_map)
+
+    def _kNN_predict_custom_k_rmse(self, k, sensor, temp_date):
+        dist, idx = self.kNN.query(np.array([sensor]), k=k)
+        temp_fn_list = [self.recon_fn[i] for i in idx[0]]
+        kNN_map_sum = 0.
+        for temp_fn in temp_fn_list:
+            kNN_map_sum += gdal.Open(temp_fn).ReadAsArray()
+        kNN_map_avg = kNN_map_sum / float(k)
+        lidar_map = gdal.Open("ASO_Lidar/" + stie_name_abbr[self.site_name].upper() + \
+                              temp_date.strftime("%Y%m%d").upper()+".tif").ReadAsArray()
+        kNN_map_avg = kNN_map_avg[lidar_map>=0]
+        lidar_map = lidar_map[lidar_map>=0]
+        return np.sqrt(mse(kNN_map_avg, lidar_map))
 
     def kNN_update_est_stats(self):
         for key_1 in self.est_stats:
@@ -179,6 +202,22 @@ class kNN_swe_regressor():
         figFn += "vs_lidar.pdf"
         plt.savefig(figFn, bbox_inches='tight')
         plt.show()
+
+    def tune_k(self):
+        np.random.seed(1)
+        # self.recon_ts, self.recon_fn, self.sensor are ready
+        sensor_date_list = zip(self.sensor, self.date_list)
+        self.k_list = range(50)
+        # k_rmse_dict would be (key: date, value: rmse list at different k value)
+        self.k_rmse_dict = {}
+        for sensor, temp_date in zip(self.sensor, self.date_list):
+            temp_rmse = []
+            for k in self.k_list:
+                temp_rmse.append(self._kNN_predict_custom_k_rmse(k, sensor, temp_date))
+            self.k_rmse_dict[temp_date] = temp_rmse
+
+    def error_vs_num_scenes(self):
+        pass
     
     # Show scatterplot statistics of the
     def scatter_statistics_figure(self):
@@ -224,10 +263,17 @@ class kNN_swe_regressor():
         plt_lines_title = []
         mean_std_max = 0.
         for p in (self.products + [self.groundTruth]):
-            tempLine = plt.errorbar(self.date_list, self.est_mean_dict[p], self.est_std_dict[p], linestyle=linestyles.pop(0), marker='o', color=colors.pop(0))
-            plt_lines.append(tempLine)
-            plt_lines_title.append(p)
-            mean_std_max = max([x+y for x, y in zip(self.est_mean_dict[p], self.est_std_dict[p])] + [mean_std_max])
+            if p != "snodas":
+                tempLine = plt.errorbar(self.date_list, self.est_mean_dict[p], self.est_std_dict[p], linestyle=linestyles.pop(0), marker='o', color=colors.pop(0))
+                plt_lines.append(tempLine)
+                plt_lines_title.append(p)
+                mean_std_max = max([x+y for x, y in zip(self.est_mean_dict[p], self.est_std_dict[p])] + [mean_std_max])
+            else:
+                if snodas:
+                    tempLine = plt.errorbar(self.date_list, self.est_mean_dict[p], self.est_std_dict[p], linestyle=linestyles.pop(0), marker='o', color=colors.pop(0))
+                    plt_lines.append(tempLine)
+                    plt_lines_title.append(p)
+                    mean_std_max = max([x+y for x, y in zip(self.est_mean_dict[p], self.est_std_dict[p])] + [mean_std_max])
 
         plt.xlim([min(self.date_list) - timedelta(days=5), max(self.date_list) + timedelta(days=5)])
         plt.grid()
