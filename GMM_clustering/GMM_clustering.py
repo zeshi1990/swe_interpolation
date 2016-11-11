@@ -10,6 +10,8 @@ import matplotlib as mpl
 mpl.rc("font", family="Helvetica")
 mpl.rc("font", size=12)
 
+np.random.seed(1)
+
 class GMM_clustering:
     
     def __init__(self, site_name, db):
@@ -27,7 +29,7 @@ class GMM_clustering:
     # Calculate bic of GMM at different n_components
     def GMM_number(self):
         lowest_bic = np.infty
-        GMM_feature = self.db.load_features(sensor_feature=False, exclude_null=True, basin=self.site_name)
+        GMM_feature = self.db.load_features(self.site_name, sensor_feature=False, exclude_null=True)
         X = np.copy(GMM_feature)
         for cv in self.cv_types:
             print cv

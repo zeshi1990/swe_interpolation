@@ -7,20 +7,18 @@ site_name_abbr = {"Merced": "mb", "Tuolumne":"tb"}
 class rasterTools:
 	def __init__(self):
 		pass
+
 	def gen_snodas_fn(self, date):
 		folder_name = "SNODAS/"
 		fn = folder_name + \
-			"us_ssmv11034tS__T0001TTNATS" + \
-			str(date.year) + \
-			str(date.month).zfill(2) + \
-			str(date.day).zfill(2) + \
+			"us_ssmv11034tS__T0001TTNATS" + date.strftime("%Y%m%d") + \
 			"05HP001.Hdr"
 		return fn
 
 	def reproject_snodas(self, dates, site_name):
 		match_fn = "ASO_Lidar/" + site_name + "_500m_DEM.tif"
 		for temp_date in dates:
-			src_fn = self._gen_snodas_fn(temp_date)
+			src_fn = self.gen_snodas_fn(temp_date)
 			dst_fn = "SNODAS/" + site_name_abbr[site_name].upper() + "_" + temp_date.strftime("%Y%m%d") + ".tif"
 			self.reproject(fn_src, match_fn, dst_fn)
 			
