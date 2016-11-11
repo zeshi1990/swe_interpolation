@@ -136,7 +136,7 @@ class kNN_swe_regressor():
         for temp_fn in temp_fn_list:
             kNN_map_sum += gdal.Open(temp_fn).ReadAsArray()
         kNN_map_avg = kNN_map_sum / float(k)
-        lidar_map = gdal.Open("ASO_Lidar/" + stie_name_abbr[self.site_name].upper() + \
+        lidar_map = gdal.Open("ASO_Lidar/" + site_name_abbr[self.site_name].upper() + \
                               temp_date.strftime("%Y%m%d").upper()+".tif").ReadAsArray()
         kNN_map_avg = kNN_map_avg[lidar_map>=0]
         lidar_map = lidar_map[lidar_map>=0]
