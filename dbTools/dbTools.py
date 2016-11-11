@@ -23,22 +23,22 @@ class dbTools:
 		        feature_space = feature_space[feature_space[:, 2] >= 0]
 		    feature_space[feature_space < 0] = np.nan
 		else:
-	        feature_array = self.db.geoms_table_to_map_pixel_values(features,
+			feature_array = self.db.geoms_table_to_map_pixel_values(features,
 																	'sensors',
 																	basin.lower(),
 																	'site_coords',
 																	'topo',
 																	basin.lower())
 
-	        spatial_feature = self.db.geoms_table_to_map_pixel_indices(features[0],
+			spatial_feature = self.db.geoms_table_to_map_pixel_indices(features[0],
 	        														   'sensors', 
 	        														   basin.lower(), 
 	        														   'site_coords', 
 	        														   'topo', 
 	        														   basin.lower())
 
-	        feature_space = np.column_stack((spatial_feature, feature_array))
-	    return feature_space
+			feature_space = np.column_stack((spatial_feature, feature_array))
+		return feature_space
 
 
 	def load_swe(self, date_obj, basin, schema_name, sensor=False):
