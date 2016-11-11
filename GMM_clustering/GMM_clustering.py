@@ -12,9 +12,10 @@ mpl.rc("font", size=12)
 
 class GMM_clustering:
     
-    def __init__(self, site_name):
+    def __init__(self, site_name, db):
         # Define parameters needed for GMM clustering analysis
         self.site_name = site_name
+        self.db = db
         self.cv_types = ['tied', 'diag', 'full']
         self.color_iter = itertools.cycle(['k', 'r', 'g', 'b', 'c', 'm', 'y'])
         self.n_components_range = range(1, 51)
@@ -24,9 +25,9 @@ class GMM_clustering:
         self.sensor_idx = None
     
     # Calculate bic of GMM at different n_components
-    def GMM_number(self, load_features):
+    def GMM_number(self):
         lowest_bic = np.infty
-        GMM_feature = load_features(sensor_feature=False, exclude_null=True, basin=self.site_name)
+        GMM_feature = self.db.load_features(sensor_feature=False, exclude_null=True, basin=self.site_name)
         X = np.copy(GMM_feature)
         for cv in self.cv_types:
             print cv
@@ -67,14 +68,14 @@ class GMM_clustering:
     # From the figure shown above, we could see that the number of 
     # components with minimum BIC score is 27 with full covariance matrix. 
     # So in the next step we need to include ```components = 27``` in the GMM parameters
-    def GMM_loc(self, load_features, kNN_db, elev_cut = None):
+    def GMM_loc(self, elev_cut = None):
         """
         input: elev_cut, int
         output: class_image, 2D array the same shape as DEM, showing the classes of each pixel belongs to
                 sensor_idx, sensor's [row, col] indices on the map
         """
-        GMM_feature = load_features(sensor_feature=False, exclude_null=False, basin=self.site_name)
-        dem = kNN_db.query_map("DEM", "topo", self.site_name)
+        GMM_feature = self.db.load_features(sensor_feature=False, exclude_null=False, basin=self.site_name)
+        dem = self.db.query_map("DEM", "topo", self.site_name)
         dem[dem < 0.] = np.nan
         if elev_cut is not None:
             print "Enforce more sampling"
@@ -119,12 +120,12 @@ class GMM_clustering:
         self.class_image = class_image
         
     # Plot final GMM location maps over DEM of the basin
-    def GMM_loc_map():
+    def GMM_loc_map(self):
         # from mpl_toolkits.axes_grid1 import make_axes_locatable
         fig, ax = plt.subplots(figsize=(3.5, 3.5))
 
         # Load basin
-        dem = kNN_db.query_map('DEM', 'topo', self.site_name)
+        dem = self.db.query_map('DEM', 'topo', self.site_name)
         dem_show = np.copy(dem)
         dem_show[dem_show <= 0.] = np.nan
         im = ax.imshow(dem_show, cmap='terrain', interpolation='bilinear')
