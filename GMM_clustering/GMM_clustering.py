@@ -1,11 +1,12 @@
 from gdal import gdalconst
 import osgeo.osr as osr
 from sklearn import mixture
+from sklearn.neighbors import KDTree
 import itertools
 import pickle
 import numpy as np
 from matplotlib import pyplot as plt
-from mpl_toolkits.axes_grid1 import axes_make_locatable
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 import matplotlib as mpl
 mpl.rc("font", family="Helvetica")
 mpl.rc("font", size=12)
@@ -14,27 +15,27 @@ np.random.seed(1)
 
 class GMM_clustering:
     
-    def __init__(self, site_name, db):
+    def __init__(self, site_name, db, n_components_lb=10, n_components_ub=30, cv_types=['tied', 'diag', 'full']):
         # Define parameters needed for GMM clustering analysis
         self.site_name = site_name
         self.db = db
-        self.cv_types = ['tied', 'diag', 'full']
+        self.cv_types = cv_types
         self.color_iter = itertools.cycle(['k', 'r', 'g', 'b', 'c', 'm', 'y'])
-        self.n_components_range = range(1, 51)
+        self.n_components_range = range(n_components_lb, n_components_ub+1)
         self.clf = None
         self.bic = []
         self.class_image = None
         self.sensor_idx = None
     
     # Calculate bic of GMM at different n_components
-    def GMM_number(self):
+    def GMM_number(self, n_init=5, n_iter=15000, random_state=20):
         lowest_bic = np.infty
-        GMM_feature = self.db.load_features(self.site_name, sensor_feature=False, exclude_null=True)
+        GMM_feature = self.db.load_features(self.site_name, sensor=False, exclude_null=True)
         X = np.copy(GMM_feature)
         for cv in self.cv_types:
-            print cv
             for n_components in self.n_components_range:
-                gmm = mixture.GMM(n_components=n_components, covariance_type=cv, n_init=20, n_iter=15000, random_state=20)
+                print cv, n_components
+                gmm = mixture.GMM(n_components=n_components, covariance_type=cv, n_init=n_init, n_iter=n_iter, random_state=random_state)
                 gmm.fit(X)
                 self.bic.append(gmm.bic(X))
                 if self.bic[-1] < lowest_bic:
@@ -45,23 +46,33 @@ class GMM_clustering:
     # Plot the bic scores with different GMM n_components
     def GMM_bic_scores(self):
         # predefine some 
-        n_components_range, cv_types, color_iter = GMM_priors()
         bars = []
-
         # generate figure
+        min_bic = np.max(self.bic)
+        min_xpos = max(self.n_components_range)
         plt.figure(figsize=(10, 5))
         spl = plt.subplot(1, 1, 1)
         for i, (cv, color) in enumerate(zip(self.cv_types, self.color_iter)):
-            xpos = np.array(self.n_components_range) + .2 * (i - 2)
+            if len(self.cv_types)==3:
+                xpos = np.array(self.n_components_range) + .2 * (i - 2)
+            elif len(self.cv_types)==1:
+                xpos = np.array(self.n_components_range) - 0.1
+            elif len(self.cv_types)==2:
+                xpos = np.array(self.n_components_range) + .2 * (i - 1)
+            temp_min_bic = np.min(self.bic[i * len(self.n_components_range):
+                                          (i + 1) * len(self.n_components_range)])
+            if temp_min_bic < min_bic:
+                min_bic = temp_min_bic
+                min_xpos = xpos[np.argmin(self.bic[i * len(self.n_components_range):
+                                          (i + 1) * len(self.n_components_range)])] + 0.1
             bars.append(plt.bar(xpos, self.bic[i * len(self.n_components_range):
                                           (i + 1) * len(self.n_components_range)],
                                 width=.2, color=color))
         plt.xticks(self.n_components_range)
+        plt.xlim(min(self.n_components_range) - 1, max(self.n_components_range) + 1)
         plt.ylim([self.bic.min() * 1.01 - .01 * self.bic.max(), self.bic.max()])
         plt.title('BIC score per model')
-        xpos = np.mod(self.bic.argmin(), len(self.n_components_range)) + .65 +\
-            .2 * np.floor(self.bic.argmin() / len(self.n_components_range))
-        plt.text(xpos, self.bic.min() * 0.97 + .03 * self.bic.max(), '*', fontsize=14)
+        plt.text(min_xpos, self.bic.min() * 0.97 + .03 * self.bic.max(), '*', fontsize=14)
         spl.set_xlabel('Number of components')
         spl.legend([b[0] for b in bars], self.cv_types)
         plt.savefig("GMM_bic_scores_" + self.site_name.lower() + ".pdf")
@@ -76,9 +87,12 @@ class GMM_clustering:
         output: class_image, 2D array the same shape as DEM, showing the classes of each pixel belongs to
                 sensor_idx, sensor's [row, col] indices on the map
         """
-        GMM_feature = self.db.load_features(sensor_feature=False, exclude_null=False, basin=self.site_name)
-        dem = self.db.query_map("DEM", "topo", self.site_name)
+        GMM_feature = self.db.load_features(sensor=False, exclude_null=False, basin=self.site_name)
+        dem = self.db.db.query_map("DEM", "topo", self.site_name)
         dem[dem < 0.] = np.nan
+        
+        xgrid, ygrid = np.meshgrid(range(dem.shape[1]), range(dem.shape[0]), sparse=False, indexing='xy')
+        
         if elev_cut is not None:
             print "Enforce more sampling"
             GMM_feature_idx = np.where(np.logical_and(np.isfinite(GMM_feature[:, 2]), 
@@ -95,7 +109,7 @@ class GMM_clustering:
         class_image[np.isnan(GMM_feature[:, 2])] = np.nan
 
         # fit and predict GMM classification
-        labels = clf.predict(X)
+        labels = self.clf.predict(X)
 
         # Labeling the class to the finite/valid features
         class_image[GMM_feature_idx] = labels
@@ -127,7 +141,7 @@ class GMM_clustering:
         fig, ax = plt.subplots(figsize=(3.5, 3.5))
 
         # Load basin
-        dem = self.db.query_map('DEM', 'topo', self.site_name)
+        dem = self.db.db.query_map('DEM', 'topo', self.site_name)
         dem_show = np.copy(dem)
         dem_show[dem_show <= 0.] = np.nan
         im = ax.imshow(dem_show, cmap='terrain', interpolation='bilinear')

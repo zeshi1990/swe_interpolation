@@ -1,10 +1,10 @@
-from .postgisUtil import postgisUtil
+from postgisUtil import postgisUtil
 from datetime import date
+import numpy as np
 
 class dbTools:
-	def __init__(database, username, site_name):
+	def __init__(self, database, username):
 		self.db = postgisUtil(database=database, username=username)
-		self.site_name = site_name
 
 	# Load topographic features from the database
 	def load_features(self, basin, sensor=False, exclude_null=True):
@@ -64,22 +64,25 @@ class dbTools:
 																basin.lower())
 		return data_array
 
-	def insert_sensor_locations(self, location_idx):
-		srid = self.db.get_srid('DEM', 'topo', self.site_name)
-		self.db.create_table(self.site_name, 'sensors', ['site_id'], ['SERIAL'])
-		self.db.add_geometry_column('sensors', self.site_name, 'site_coords', srid, 'POINT', 2, use_typemod='false')
-		location_coords = self.db.convert_idx_to_coords('DEM', location_idx[1], location_idx[0], 'topo', self.site_name)
+	def insert_sensor_locations(self, basin, location_idx):
+		srid = self.db.get_srid('DEM', 'topo', basin.lower())
+		self.db.create_table(basin.lower(), 'sensors', ['site_id'], ['SERIAL'])
+		self.db.add_geometry_column('sensors', basin.lower(), 'site_coords', srid, 'POINT', 2, use_typemod='false')
+		location_coords = self.db.convert_idx_to_coords('DEM', location_idx[1], location_idx[0], 'topo', basin.lower())
 		self.db.add_geoms_to_table(location_coords[0], location_coords[1], srid, 'sensors', 'site_locs', 'site_coords')
 
-	def insert_swe(self, raster_fn, date_obj, schema_name, schema_exist=True):
+	def insert_swe(self, raster_fn, date_obj, basin, schema_name, schema_exist=True, table_exist=True):
 		# if schema_exists == false, which means that you have to set table_exist to False
-		date_str = date_obj.strftime("%Y%m%d")
+		if type(date_obj) != str:
+			date_str = date_obj.strftime("%Y%m%d")
+		else:
+			date_str = date_obj
 		if not schema_exist:
 		    self.db.create_schema(schema_name)
-		if not schema_exist:
-			self.db.load_map_to_db(raster_fn, date_str, schema_name, self.site_name, table_exist=False)
+		if not table_exist:
+			self.db.load_map_to_db(raster_fn, date_str, schema_name, basin.lower(), table_exist=table_exist)
 		else:
-			self.db.load_map_to_db(raster_fn, date_str, schema_name, self.site_name)
+			self.db.load_map_to_db(raster_fn, date_str, schema_name, basin.lower())
 
 
 

@@ -20,7 +20,7 @@ class rasterTools:
 		for temp_date in dates:
 			src_fn = self.gen_snodas_fn(temp_date)
 			dst_fn = "SNODAS/" + site_name_abbr[site_name].upper() + "_" + temp_date.strftime("%Y%m%d") + ".tif"
-			self.reproject(fn_src, match_fn, dst_fn)
+			self.reproject(src_fn, match_fn, dst_fn)
 			
 	def reproject(self, src_fn, match_fn, dst_fn, lidar=False):
 		src_filename = src_fn
@@ -41,6 +41,10 @@ class rasterTools:
 		dst = gdal.GetDriverByName('GTiff').Create(dst_filename, wide, high, 1, gdalconst.GDT_Float32)
 		dst.SetGeoTransform( match_geotrans )
 		dst.SetProjection( match_proj)
+		dst.GetRasterBand(1).SetNoDataValue(-9999.0)
+		a = np.ndarray(shape=(high, wide))
+		a.fill(-9999.0)
+		dst.GetRasterBand(1).WriteArray(a)
 		if not lidar:
 			gdal.ReprojectImage(src, dst, src_proj, match_proj, gdalconst.GRA_Bilinear)
 		else:
@@ -50,7 +54,7 @@ class rasterTools:
 	def reproject_lidar(self, src_fn, match_fn, dst_fn):
 		self.reproject(src_fn, match_fn, dst_fn, lidar=True)
 
-	def array_to_raster(array, dst_fn, match_fn):
+	def array_to_raster(self, array, dst_fn, match_fn):
 		"""Array > Raster
 		Save a raster from a C order array.
 
