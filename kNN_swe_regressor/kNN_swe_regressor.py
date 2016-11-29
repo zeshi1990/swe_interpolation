@@ -1,6 +1,7 @@
 import gdal
 import numpy as np
 import pickle
+import os
 import threading
 from datetime import timedelta, date
 from scipy.stats import linregress, gaussian_kde
@@ -14,8 +15,33 @@ import matplotlib as mpl
 mpl.rc("font", family="Helvetica")
 mpl.rc("font", size=12)
 
-site_name_abbr = {"Merced": "mb", "Tuolumne":"tb"}
-density_factor = {"Merced": 0.333, "Tuolumne": 1.0}
+site_name_abbr = {"Merced": "mb",
+                  "Tuolumne": "tb",
+                  "Tuolumne_survey": "mbtb",
+                  "Tuolumne_survey_plus": "mbtb_plus"}
+
+lidar_name_abbr = {2014:{"Merced": "mb",
+                  "Tuolumne":"tb",
+                  "Tuolumne_survey": "tb",
+                  "Tuolumne_survey_plus": "mbtb"},
+                   2016:{"Tuolumne":"tb",
+                  "Tuolumne_survey": "tb",
+                  "Tuolumne_survey_plus": "tb"}}
+
+dem_name = {"Merced": "Merced",
+            "Tuolumne": "Tuolumne",
+            "Tuolumne_survey": "Tuolumne",
+            "Tuolumne_survey_plus": "Tuolumne"}
+
+product_name_abbr = {"Merced": "mb",
+                     "Tuolumne":"tb",
+                     "Tuolumne_survey": "tb",
+                     "Tuolumne_survey_plus": "tb"}
+
+density_factor = {"Merced": 1.0,
+                  "Tuolumne": 1.0,
+                  "Tuolumne_survey":1.0,
+                  "Tuolumne_survey_plus": 1.0}
 
 class kNN_swe_regressor():
     def __init__(self, site_name, year, date_list, k):
@@ -24,12 +50,12 @@ class kNN_swe_regressor():
         self.date_list = date_list[self.year][site_name]
         self.num_days = len(self.date_list)
         self.k = k
-        self.kNN = None
         self.groundTruth = 'lidar'
         if self.year <= 2014:
             self.products = ['kNN', 'recon', 'snodas']
         else:
             self.products = ['kNN', 'snodas']
+        self.valid_sensor_idx = []
         self.est_dict = {'kNN':[], 'kNN_GP':[], 'lidar':[], 'recon':[], 'snodas': [], 'elev':[]}
         self.est_mean_dict = {'kNN':[], 'kNN_GP':[], 'lidar':[], 'recon':[], 'snodas': []}
         self.est_std_dict = {'kNN':[], 'kNN_GP':[], 'lidar':[], 'recon':[], 'snodas': []}
@@ -45,7 +71,8 @@ class kNN_swe_regressor():
     
     # Construct kNN features for particular year and basin, only needs to run once
     def kNN_feature_construct(self, sensor_loc):
-        recon_dir = site_name_abbr[self.site_name].upper() + "_recon/"
+        recon_read_dir = site_name_abbr[self.site_name].upper() + "_recon/"
+        recon_write_dir = product_name_abbr[self.site_name].upper() + "_recon/"
         year_range = range(2001, 2014)
         historical_fn_list = []
         recon_ts = None
@@ -53,9 +80,10 @@ class kNN_swe_regressor():
             temp_date = date(year, 4, 1)
             ending_date = date(year, 8, 31)
             while temp_date <= ending_date:
-                temp_fn = recon_dir + temp_date.strftime("%d%b%Y").upper() + ".tif"
-                historical_fn_list.append(temp_fn)
+                temp_fn = recon_read_dir + temp_date.strftime("%d%b%Y").upper() + ".tif"
                 temp_recon = gdal.Open(temp_fn).ReadAsArray()
+                temp_fn = recon_write_dir + temp_date.strftime("%d%b%Y").upper() + ".tif"
+                historical_fn_list.append(temp_fn)
                 temp_date += timedelta(days=1)
                 if recon_ts is None:
                     recon_ts = temp_recon[sensor_loc]
@@ -67,14 +95,14 @@ class kNN_swe_regressor():
 
         sensor_data = None
         for temp_date in self.date_list:
-            lidar_fn = "ASO_Lidar/" + site_name_abbr[self.site_name].upper() + temp_date.strftime("%Y%m%d") + "_500m.tif"
+            lidar_fn = "ASO_Lidar/" + lidar_name_abbr[self.year][self.site_name].upper() + \
+                       temp_date.strftime("%Y%m%d") + "_500m.tif"
             lidar_swe = gdal.Open(lidar_fn).ReadAsArray() * density_factor[self.site_name]
             if sensor_data is None:
                 sensor_data = lidar_swe[sensor_loc]
             else:
                 sensor_data = np.vstack((sensor_data, lidar_swe[sensor_loc]))
-        sensor_data[sensor_data < 0] = 0.
-        sensor_data[np.isnan(sensor_data)] = 0.
+        sensor_data[sensor_data < 0] = np.nan
         np.save("kNN_training_testing/" + site_name_abbr[self.site_name] + "_" +str(self.year) + \
                 "_aso_simulated_sensor_data.npy", sensor_data)
     
@@ -85,25 +113,31 @@ class kNN_swe_regressor():
                                            "_2001_2013_filenames.p", "rb"))
         self.sensor = np.load("kNN_training_testing/" + site_name_abbr[self.site_name] + "_" +str(self.year) + \
                               "_aso_simulated_sensor_data.npy")
-        emp_cov = EmpiricalCovariance().fit(self.recon_ts)
-        emp_cov_matrix = emp_cov.get_precision()
-        dist = DistanceMetric.get_metric('mahalanobis', V=emp_cov_matrix)
-        self.kNN = BallTree(self.recon_ts, metric=dist)
     
     # estimate the SWE for the 2D case for all days
     def kNN_predict(self):
         self.load_kNN_data()
         map(self.kNN_predict_mapper, zip(self.sensor, self.date_list))
-       
+
     # Estimate SWE for each individual day
     def kNN_predict_mapper(self, sensor_date_tuple):
         sensor = sensor_date_tuple[0]
         temp_date = sensor_date_tuple[1]
-        dem = gdal.Open("ASO_Lidar/" + self.site_name + "_500m_DEM.tif").ReadAsArray()
-        dist, idx = self.kNN.query(np.array([sensor]), k=self.k)
+        valid_sensor_idx = np.argwhere(np.isfinite(sensor)).T[0]
+        self.valid_sensor_idx.append(valid_sensor_idx)
+
+        # Construct dynamic kNN predictor
+        emp_cov = EmpiricalCovariance().fit(self.recon_ts[:, valid_sensor_idx])
+        emp_cov_matrix = emp_cov.get_precision()
+        dist_metric = DistanceMetric.get_metric('mahalanobis', V=emp_cov_matrix)
+        kNN = BallTree(self.recon_ts[:, valid_sensor_idx], metric=dist_metric)
+
+        # Load DEM for this basin
+        dem = gdal.Open("ASO_Lidar/" + dem_name[self.site_name] + "_500m_DEM.tif").ReadAsArray()
+        dist, idx = kNN.query(np.array([sensor[valid_sensor_idx]]), k=self.k)
         temp_fn_list = [self.recon_fn[i] for i in idx[0]]
-        self.est_sensor.append(np.nanmean(self.recon_ts[idx[0]], axis=0))
-        self.est_residual.append(sensor - self.est_sensor[-1])
+        self.est_sensor.append(np.nanmean(self.recon_ts[idx[0]][:, valid_sensor_idx], axis=0))
+        self.est_residual.append(sensor[valid_sensor_idx] - self.est_sensor[-1])
 
         # Compute the sum of all k-nearest neighbors
         kNN_map_sum = 0.
@@ -114,14 +148,14 @@ class kNN_swe_regressor():
         kNN_map_avg = kNN_map_sum / float(self.k)
 
         # Load lidar, reconstruction, snodas at the same date
-        lidar_map = gdal.Open("ASO_Lidar/"+site_name_abbr[self.site_name].upper() + \
+        lidar_map = gdal.Open("ASO_Lidar/"+product_name_abbr[self.site_name].upper() + \
                               temp_date.strftime("%Y%m%d") + "_500m.tif").ReadAsArray() * density_factor[self.site_name]
 
         if self.year <= 2014:
-            recon_map = gdal.Open(site_name_abbr[self.site_name].upper() + \
+            recon_map = gdal.Open(product_name_abbr[self.site_name].upper() + \
                                   "_recon/"+temp_date.strftime("%d%b%Y").upper()+".tif").ReadAsArray()
 
-        snodas_map = gdal.Open("SNODAS/" + site_name_abbr[self.site_name].upper() + "_" + \
+        snodas_map = gdal.Open("SNODAS/" + product_name_abbr[self.site_name].upper() + "_" + \
                                temp_date.strftime("%Y%m%d") + ".tif").ReadAsArray() / 1000.
 
         # Filter these data by lidar value and store them in the est_dict
@@ -143,7 +177,14 @@ class kNN_swe_regressor():
             self.est_raw_dict['recon'].append(recon_map)
 
     def _kNN_predict_custom_k_rmse(self, k, sensor, temp_date):
-        dist, idx = self.kNN.query(np.array([sensor]), k=k)
+        valid_sensor_idx = np.argwhere(np.isfinite(sensor)).T[0]
+
+        # Construct dynamic kNN predictor
+        emp_cov = EmpiricalCovariance().fit(self.recon_ts[:, valid_sensor_idx])
+        emp_cov_matrix = emp_cov.get_precision()
+        dist_metric = DistanceMetric.get_metric('mahalanobis', V=emp_cov_matrix)
+        kNN = BallTree(self.recon_ts[:, valid_sensor_idx], metric=dist_metric)
+        dist, idx = kNN.query(np.array([sensor]), k=k)
         temp_fn_list = [self.recon_fn[i] for i in idx[0]]
         kNN_map_sum = 0.
         for temp_fn in temp_fn_list:
@@ -172,21 +213,27 @@ class kNN_swe_regressor():
     def _compute_pair_kde_single(self, product, idx):
         x_1 = self.est_dict[self.groundTruth][idx]
         x_2 = self.est_dict[product][idx]
-        bivariate_x = np.column_stack(((x_1, x_2)))
-        kde = gaussian_kde(bivariate_x)
+        bivariate_x = np.vstack(((x_1, x_2)))
+        kde = gaussian_kde(bivariate_x, bw_method=0.9)
         self.est_vs_gt_kde[product][idx] = kde(bivariate_x)
 
     def compute_pair_kde(self):
         # initialize kde
         for key in self.est_vs_gt_kde:
-            self.est_vs_gt_kde[key] = [0] * self.num_days
+            if not self.est_vs_gt_kde[key]:
+                self.est_vs_gt_kde[key] = [0] * self.num_days
 
+        thread_list = []
         # iterate through all the products
         for product in self.products:
             # iterate through all the days
-            for idx in range(self.num_days):
-                t = threading.Thread(target=self._compute_pair_kde_single, args=(product, idx))
-                t.start()
+            if all([not np.any(i) for i in self.est_vs_gt_kde[product]]):
+                for idx in range(self.num_days):
+                    t = threading.Thread(target=self._compute_pair_kde_single, args=(product, idx))
+                    thread_list.append(t)
+                    t.start()
+        for thread in thread_list:
+            thread.join()
 
     # plot model results vs lidar
     def kNN_recon_snodas_vs_lidar(self):
@@ -204,7 +251,7 @@ class kNN_swe_regressor():
             # Iterate through all the products and make scatter plots with regression line
             for i, p in enumerate(self.products):
                 axarr[j, i].scatter(self.est_dict[self.groundTruth][j], self.est_dict[p][j], c=self.est_vs_gt_kde[p][j],
-                                    s=2, edgecolor='none', cmap='cool', alpha=0.5)
+                                    s=2, edgecolor='none', cmap='jet', alpha=0.8)
                 axarr[j, i].plot([0, 1], [0, 1], '--k')
                 axarr[j, i].plot([0, 1], [self.est_stats['intercept'][p][j],
                                           self.est_stats['slope'][p][j] + self.est_stats['intercept'][p][j]], '-b')
@@ -251,8 +298,8 @@ class kNN_swe_regressor():
         figFn = self.site_name + "_simulated_"
         for p in self.products:
             figFn += p + "_"
-        figFn += "vs_lidar_" + str(self.year) + ".pdf"
-        plt.savefig(figFn, bbox_inches='tight')
+        figFn += "vs_lidar_" + str(self.year) + ".png"
+        plt.savefig(figFn, bbox_inches='tight', dpi=500)
         plt.show()
 
     def tune_k(self):
